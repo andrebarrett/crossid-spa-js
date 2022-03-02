@@ -33,6 +33,17 @@ export interface TokenRequest {
   timeout?: number
 }
 
+export interface RefreshTokenRequest {
+  tokenEndpoint: string
+  client_id: string
+  audience,
+  scope,
+  refresh_token: string
+  grant_type: string
+  redirect_uri: string
+  timeout?: number
+}
+
 export interface TokenResponse {
   access_token: string
   id_token: string
@@ -46,7 +57,7 @@ export async function TokenEndpoint({
   tokenEndpoint,
   timeout,
   ...opts
-}: TokenRequest): Promise<TokenResponse> {
+}: TokenRequest | RefreshTokenRequest): Promise<TokenResponse> {
   let formData = new FormData()
   Object.keys(opts).forEach((k) => formData.append(k, opts[k]))
 

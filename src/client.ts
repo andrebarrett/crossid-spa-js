@@ -32,7 +32,7 @@ import {
 import { generatePKCECodeVerifier, sha256 } from './crypto'
 import { base64Encode, base64URLEncode, bufferToBase64URLEncode } from './codec'
 import { createQueryString } from './url'
-import { TokenEndpoint, TokenRequest } from './api'
+import { RefreshTokenRequest, TokenEndpoint, TokenRequest } from './api'
 import { assert, decode } from './jwt'
 import {
   JWTAlgAssertion,
@@ -186,6 +186,41 @@ export interface GetUserOpts {
    * The audience that were requested when authenticated.
    */
   audience?: string[]
+}
+
+export interface GetTokenSilentlyOptions {
+  redirect_uri?: string
+  /**
+   * When `true`, ignores the cache and always sends a
+   * request to Auth0.
+   */
+  ignoreCache?: boolean
+
+  /**
+   * The scopes that were requested when authenticated.
+   */
+  scope?: string
+
+  /**
+   * The audience that were requested when authenticated.
+   */
+  audience?: string
+
+  /** A maximum number of seconds to wait before declaring the background /authorize call as failed for timeout
+   * Defaults to 60s.
+   */
+  timeoutInSeconds?: number
+}
+
+type GetTokenSilentlyResult = {
+  decodedToken: ReturnType<typeof decode>
+  scope: string
+  oauthTokenScope?: string
+  audience: string
+  id_token: string
+  access_token: string
+  refresh_token?: string
+  expires_in: number
 }
 
 /**
@@ -402,6 +437,76 @@ export default class CrossidClient {
   }
 
   /**
+   * Fetches a new access token, and either returns just the access token (the default) or the response from the /oauth/token endpoint, depending on the `detailedResponse` option.
+   *
+   * ```js
+   * const token = await auth0.getTokenSilently(options);
+   * ```
+   *
+   * If there's a valid token stored and it has more than 60 seconds
+   * remaining before expiration, return the token. Otherwise, attempt 
+   * to obtain a new token. 
+   *
+   * A new token will be obtained either by opening an iframe or a 
+   * refresh token (if `useRefreshTokens` is `true`)
+   
+   * If iframes are used, opens an iframe with the `/authorize` URL 
+   * using the parameters provided as arguments. Random and secure `state` 
+   * and `nonce` parameters will be auto-generated. If the response is successful, 
+   * results will be validated according to their expiration times.
+   *
+   * If refresh tokens are used, the token endpoint is called directly with the
+   * 'refresh_token' grant. If no refresh token is available to make this call,
+   * the SDK falls back to using an iframe to the '/authorize' URL.
+   *
+   * This method may use a web worker to perform the token call if the in-memory
+   * cache is used.
+   *
+   * If an `audience` value is given to this function, the SDK always falls
+   * back to using an iframe to make the token exchange.
+   *
+   * Note that in all cases, falling back to an iframe requires access to
+   * the `auth0` cookie.
+   *
+   * @param options
+   */
+  public async getTokenSilently(
+    options: GetTokenSilentlyOptions = {}
+  ): Promise<string> {
+    const { ignoreCache, ...getTokenOptions } = {
+      audience: options.audience,
+      ignoreCache: false,
+      ...options,
+      scope: getUniqueScopes(this.scope, options.scope),
+    }
+
+    const getAccessTokenOptions: GetAccessTokenOpts = {
+      scope: getTokenOptions.scope ?? this.opts.scope,
+      audience: getTokenOptions.audience?.split(',') ?? this.opts.audience,
+    }
+    // Check the cache before acquiring the lock to avoid the latency of
+    // `lock.acquireLock` when the cache is populated.
+    if (!ignoreCache) {
+      const entry = await this.getAccessToken(getAccessTokenOptions)
+
+      if (entry) {
+        return entry
+      }
+    }
+
+    try {
+      const authResult = await this._getTokenUsingRefreshToken(getTokenOptions)
+
+      const idToken = decode<IDToken>(authResult.id_token)
+      const accessToken = decode(authResult.access_token)
+
+      this._cacheTokens(idToken, accessToken, authResult.refresh_token)
+
+      return authResult.access_token
+    } catch (e) {}
+  }
+
+  /**
    * Returns an access token.
    *
    * @param opts options to get an access token for a more specific authentication.
@@ -523,6 +628,64 @@ export default class CrossidClient {
 
     return {
       state: state.appState,
+    }
+  }
+
+  private async getRefreshToken(
+    opts: GetAccessTokenOpts = {}
+  ): Promise<string | undefined> {
+    const aud = this.getFinalAudience(opts.audience)
+    const scp = this.getFinalScope(opts.scope)
+    const keys = this._getTokensKeysFromCache('refresh_token', aud, scp)
+    const tok = this._getNarrowedKey<DecodedJWT<JWTClaims>>(keys)
+    return tok?.payload?._raw
+  }
+
+  private async _getTokenUsingRefreshToken(
+    options: GetTokenSilentlyOptions
+  ): Promise<GetTokenSilentlyResult> {
+    const getRefreshTokenOptions: GetAccessTokenOpts = {
+      scope: options.scope,
+      audience: options.audience?.split(',') ?? this.opts.audience,
+    }
+    const refreshToken = await this.getRefreshToken(getRefreshTokenOptions)
+
+    const redirect_uri =
+      options.redirect_uri || this.opts.redirect_uri || window.location.origin
+
+    try {
+      const tokenOptions = {
+        ...this.opts,
+        ...options,
+        tokenEndpoint: this.opts.token_endpoint,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        redirect_uri,
+      } as RefreshTokenRequest
+
+      const resp = await TokenEndpoint(tokenOptions)
+      let idToken: DecodedJWT<IDToken>
+
+      if (resp.id_token) {
+        idToken = decode<IDToken>(resp.id_token)
+        idToken.payload[BEARER_CLAIM] = resp.id_token
+      }
+
+      const accessToken = decode<JWTClaims>(resp.access_token)
+      this.state.remove(this.loginStateKey)
+      this._assertAccessToken(accessToken, options.audience.split(','))
+      accessToken.payload._raw = resp.access_token
+      this._cacheTokens(idToken, accessToken, resp.refresh_token)
+
+      return {
+        ...resp,
+        decodedToken: accessToken,
+        scope: options.scope,
+        oauthTokenScope: resp.scope,
+        audience: options.audience || 'default',
+      }
+    } catch (e) {
+      throw e
     }
   }
 
@@ -950,4 +1113,13 @@ export default class CrossidClient {
       ? uniqueScopes(localScp)
       : uniqueScopes(this.scope)
   }
+}
+
+const dedupe = (arr: string[]) => Array.from(new Set(arr))
+
+/**
+ * @ignore
+ */
+export const getUniqueScopes = (...scopes: string[]) => {
+  return dedupe(scopes.join(' ').trim().split(/\s+/)).join(' ')
 }
