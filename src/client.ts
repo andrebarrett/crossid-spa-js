@@ -440,33 +440,15 @@ export default class CrossidClient {
    * Fetches a new access token, and either returns just the access token (the default) or the response from the /oauth/token endpoint, depending on the `detailedResponse` option.
    *
    * ```js
-   * const token = await auth0.getTokenSilently(options);
+   * const token = await client.getTokenSilently(options);
    * ```
    *
    * If there's a valid token stored and it has more than 60 seconds
-   * remaining before expiration, return the token. Otherwise, attempt 
-   * to obtain a new token. 
+   * remaining before expiration, return the token. Otherwise, attempt
+   * to obtain a new token.
    *
-   * A new token will be obtained either by opening an iframe or a 
+   * A new token will be obtained either by using a
    * refresh token (if `useRefreshTokens` is `true`)
-   
-   * If iframes are used, opens an iframe with the `/authorize` URL 
-   * using the parameters provided as arguments. Random and secure `state` 
-   * and `nonce` parameters will be auto-generated. If the response is successful, 
-   * results will be validated according to their expiration times.
-   *
-   * If refresh tokens are used, the token endpoint is called directly with the
-   * 'refresh_token' grant. If no refresh token is available to make this call,
-   * the SDK falls back to using an iframe to the '/authorize' URL.
-   *
-   * This method may use a web worker to perform the token call if the in-memory
-   * cache is used.
-   *
-   * If an `audience` value is given to this function, the SDK always falls
-   * back to using an iframe to make the token exchange.
-   *
-   * Note that in all cases, falling back to an iframe requires access to
-   * the `auth0` cookie.
    *
    * @param options
    */

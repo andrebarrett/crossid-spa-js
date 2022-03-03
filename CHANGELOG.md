@@ -1,5 +1,9 @@
 # @crossid/crossid-spa-js
 
+## 0.5.0
+### Minor Changes
+
+Added a get token silently function in the client. The function uses the refresh token to fetch a new token if there is no current token stored in the cache.
 ## 0.4.1
 
 [All Changes](https://github.com/crossid/crossid-spa-js/compare/v0.4.0...v0.4.1)
