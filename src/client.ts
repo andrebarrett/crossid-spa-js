@@ -494,16 +494,20 @@ export default class CrossidClient {
       }
     }
 
+    const refreshTokenOptions = {
+      ...options,
+      audience: getTokenOptions.audience ?? this.opts.audience.join(','),
+    }
+
     try {
-      const authResult = await this._getTokenUsingRefreshToken(getTokenOptions)
-
-      const idToken = decode<IDToken>(authResult.id_token)
-      const accessToken = decode(authResult.access_token)
-
-      this._cacheTokens(idToken, accessToken, authResult.refresh_token)
+      const authResult = await this._getTokenUsingRefreshToken(
+        refreshTokenOptions
+      )
 
       return authResult.access_token
-    } catch (e) {}
+    } catch (e) {
+      throw e
+    }
   }
 
   /**
@@ -671,10 +675,13 @@ export default class CrossidClient {
         idToken.payload[BEARER_CLAIM] = resp.id_token
       }
 
-      const accessToken = decode<JWTClaims>(resp.access_token)
       this.state.remove(this.loginStateKey)
-      this._assertAccessToken(accessToken, options.audience.split(','))
+
+      const accessToken = decode<JWTClaims>(resp.access_token)
+      this._assertAccessToken(accessToken, options.audience?.split(','))
+
       accessToken.payload._raw = resp.access_token
+
       this._cacheTokens(idToken, accessToken, resp.refresh_token)
 
       return {
@@ -682,7 +689,7 @@ export default class CrossidClient {
         decodedToken: accessToken,
         scope: options.scope,
         oauthTokenScope: resp.scope,
-        audience: options.audience || 'default',
+        audience: options.audience ?? this.opts.audience.join(','),
       }
     } catch (e) {
       throw e
